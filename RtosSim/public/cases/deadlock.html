@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Smart Cargo Station - Deadlock & Mutex Visualizer</title>
+    <style>
+        /* Global Light Theme */
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f4f7f6; color: #333; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        h2 { color: #2c3e50; margin-bottom: 20px; text-align: center; }
+
+        .main-wrapper { display: flex; gap: 30px; max-width: 1400px; width: 100%; align-items: flex-start; }
+
+        /* Simulation Canvas Area */
+        .simulation-container { flex: 1.2; display: flex; flex-direction: column; align-items: center; }
+        .canvas { width: 650px; height: 500px; background: white; border-radius: 15px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 1px solid #e0e0e0; overflow: hidden; }
+        
+        .toolbar { background: white; padding: 15px; border-radius: 10px; display: flex; gap: 20px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e0e0e0; width: 100%; justify-content: center; }
+        button { padding: 10px 20px; background: #3498db; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button:hover { background: #2980b9; transform: translateY(-2px); }
+
+        /* Node Elements */
+        .node { position: absolute; width: 115px; height: 115px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-weight: bold; z-index: 10; cursor: pointer; transition: 0.3s; border: 4px solid; }
+        .task { background: #f0f7ff; border-color: #3498db; border-radius: 50%; color: #2980b9; }
+        .task.active { background: #3498db; color: white; box-shadow: 0 0 20px rgba(52, 152, 219, 0.4); }
+        .mutex { background: #fffdf2; border-color: #f1c40f; border-radius: 12px; color: #9a7d0a; }
+        .type-tag { font-size: 10px; text-transform: uppercase; opacity: 0.6; margin-bottom: 4px; }
+
+        /* SVG Connection Lines */
+        svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
+        .line-lock { stroke: #27ae60; stroke-width: 5; fill: none; marker-end: url(#arrow-green); filter: drop-shadow(0 2px 3px rgba(0,0,0,0.1)); }
+        .line-wait { stroke: #e74c3c; stroke-width: 5; fill: none; stroke-dasharray: 12,12; marker-end: url(#arrow-red); animation: dash 0.6s linear infinite; }
+        @keyframes dash { to { stroke-dashoffset: -24; } }
+
+        /* Code Display Panel - Fixed Line Height and Vertical Flow */
+        .code-panel { flex: 1; background: #1e1e1e; color: #d4d4d4; padding: 25px; border-radius: 15px; font-family: 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.8; box-shadow: 0 15px 35px rgba(0,0,0,0.3); border: 1px solid #333; overflow-x: auto; min-height: 500px; }
+        .code-header { color: #569cd6; font-size: 14px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #3c3c3c; display: flex; justify-content: space-between; }
+        .code-content { white-space: pre; } /* Ensures code preserves line breaks */
+        
+        .comment { color: #6a9955; font-style: italic; }
+        .keyword { color: #c586c0; }
+        .func { color: #dcdcaa; }
+        .string { color: #ce9178; }
+        .highlight-block { background: rgba(231, 76, 60, 0.15); border-left: 4px solid #e74c3c; padding: 5px 0 5px 15px; margin: 5px 0; display: block; }
+
+        /* UI Overlays */
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(231, 76, 60, 0.15); z-index: 20; display: none; flex-direction: column; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+        .overlay h1 { color: #c0392b; font-size: 40px; text-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+        
+        .progress-ring { position: absolute; top: -10px; left: -10px; width: 135px; height: 135px; pointer-events: none; opacity: 0; }
+        .progress-ring circle { fill: transparent; stroke: #e74c3c; stroke-width: 8; stroke-dasharray: 377; stroke-dashoffset: 377; transition: 0.1s linear; }
+    </style>
+</head>
+<body>
+
+<h2>Case 4: Smart Cargo Station - Mutex Interaction & Deadlock Analysis</h2>
+
+<div class="main-wrapper">
+    <!-- LEFT: Simulation Canvas -->
+    <div class="simulation-container">
+        <div class="toolbar">
+            <button onclick="resetSystem()">Reset Simulation</button>
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: bold; color: #d35400;">
+                <input type="checkbox" id="timeout-toggle" style="width:18px; height:18px;"> Enable Recovery Timeout
+            </label>
+        </div>
+
+        <div class="canvas">
+            <div class="overlay" id="deadlock-ui"><h1>DEADLOCK DETECTED!</h1></div>
+            <svg>
+                <defs>
+                    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#27ae60" /></marker>
+                    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#e74c3c" /></marker>
+                </defs>
+                <path id="path-A-Hatch" d="M 155 95 L 490 95" style="display:none;"/>
+                <path id="path-A-Cam" d="M 95 155 L 95 330" style="display:none;"/>
+                <path id="path-B-Cam" d="M 490 350 L 155 350" style="display:none;"/>
+                <path id="path-B-Hatch" d="M 545 330 L 545 155" style="display:none;"/>
+            </svg>
+
+            <div class="node task" id="node-A" style="top: 45px; left: 45px;" onclick="selectNode('A')">
+                <span class="type-tag">Process</span>Task A<br><small>Dropper</small>
+                <svg class="progress-ring" id="ring-A"><circle cx="67" cy="67" r="60"></circle></svg>
+            </div>
+            <div class="node mutex" id="node-Hatch" style="top: 45px; right: 45px;" onclick="handleRequest('Hatch')">
+                <span class="type-tag">Resource</span>M_Hatch
+            </div>
+            <div class="node mutex" id="node-Cam" style="bottom: 45px; left: 45px;" onclick="handleRequest('Cam')">
+                <span class="type-tag">Resource</span>M_Camera
+            </div>
+            <div class="node task" id="node-B" style="bottom: 45px; right: 45px;" onclick="selectNode('B')">
+                <span class="type-tag">Process</span>Task B<br><small>Scanner</small>
+                <svg class="progress-ring" id="ring-B"><circle cx="67" cy="67" r="60"></circle></svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: Code Panel with Line Breaks and English Comments -->
+    <div class="code-panel">
+        <div class="code-header"><span>RTOS Logic</span><span>cargo_system.c</span></div>
+<div class="code-content"><span class="keyword">#include</span> <span class="string">"FreeRTOS.h"</span>
+<span class="keyword">#include</span> <span class="string">"semphr.h"</span>
+
+<span class="comment">// Define shared resources as Mutexes</span>
+<span class="keyword">SemaphoreHandle_t</span> xHatch; 
+<span class="keyword">SemaphoreHandle_t</span> xCamera;
+
+<span class="keyword">void</span> <span class="func">vTaskA_Dropper</span>(<span class="keyword">void</span> *pv) {
+  <span class="keyword">for</span>(;;) {
+    <span class="comment">// Task A attempts to lock the Hatch</span>
+    <span class="keyword">if</span>(<span class="func">xSemaphoreTake</span>(xHatch, <span class="func">portMAX_DELAY</span>) == <span class="func">pdTRUE</span>) {
+      
+      <span class="comment">// CRITICAL SECTION: Task B is blocked if it requests Hatch!</span>
+      <span class="func">vTaskDelay</span>(<span class="func">pdMS_TO_TICKS</span>(100));
+
+<div class="highlight-block"><span class="comment">// Task A requests the Camera. If Task B currently</span>
+<span class="comment">// holds the Camera, Task A will enter BLOCKED state.</span>
+<span class="keyword">if</span>(<span class="func">xSemaphoreTake</span>(xCamera, <span class="func">portMAX_DELAY</span>) == <span class="func">pdTRUE</span>) {
+  <span class="func">executeCargoAction</span>(); <span class="comment">// Secure Operation</span>
+  <span class="func">xSemaphoreGive</span>(xCamera);
+}</div>
+      <span class="func">xSemaphoreGive</span>(xHatch); <span class="comment">// Resource released for Task B</span>
+    }
+  }
+}
+
+<span class="keyword">void</span> <span class="func">vTaskB_Scanner</span>(<span class="keyword">void</span> *pv) {
+  <span class="comment">// If Task B takes Camera first and then waits for Hatch:</span>
+  <span class="comment">// A "Circular Wait" occurs, leading to a system Deadlock.</span>
+}</div>
+    </div>
+</div>
+
+<script>
+    let sysState = {
+        selectedTask: null,
+        isDeadlock: false,
+        tasks: { 
+            A: { owns: [], waitingFor: null, timer: null }, 
+            B: { owns: [], waitingFor: null, timer: null } 
+        },
+        mutexes: { Hatch: null, Cam: null }
+    };
+
+    function selectNode(taskID) {
+        if(sysState.isDeadlock || sysState.tasks[taskID].waitingFor) return;
+        document.querySelectorAll('.task').forEach(n => n.classList.remove('active'));
+        document.getElementById(`node-${taskID}`).classList.add('active');
+        sysState.selectedTask = taskID;
+    }
+
+    function handleRequest(mutexID) {
+        if(!sysState.selectedTask || sysState.isDeadlock) return;
+        let t = sysState.selectedTask;
+        
+        if(sysState.tasks[t].owns.includes(mutexID)) return;
+
+        let path = document.getElementById(`path-${t}-${mutexID}`);
+        
+        if(!sysState.mutexes[mutexID]) {
+            // LOCK MUTEX (Success)
+            sysState.mutexes[mutexID] = t;
+            sysState.tasks[t].owns.push(mutexID);
+            path.className.baseVal = 'line-lock';
+            path.style.display = 'block';
+        } else {
+            // ENTER BLOCKED STATE (Wait)
+            sysState.tasks[t].waitingFor = mutexID;
+            path.className.baseVal = 'line-wait';
+            path.style.display = 'block';
+            checkDeadlockLogic();
+        }
+        
+        document.getElementById(`node-${t}`).classList.remove('active');
+        sysState.selectedTask = null;
+    }
+
+    function checkDeadlockLogic() {
+        if(sysState.tasks.A.waitingFor === 'Cam' && sysState.tasks.B.waitingFor === 'Hatch' && 
+           sysState.mutexes.Hatch === 'A' && sysState.mutexes.Cam === 'B') {
+            sysState.isDeadlock = true;
+            document.getElementById('deadlock-ui').style.display = 'flex';
+            if(document.getElementById('timeout-toggle').checked) {
+                runTimer('A'); runTimer('B');
+            }
+        }
+    }
+
+    function runTimer(taskID) {
+        let ring = document.getElementById(`ring-${taskID}`);
+        let circ = ring.querySelector('circle');
+        ring.style.opacity = '1';
+        let offset = 377;
+        sysState.tasks[taskID].timer = setInterval(() => {
+            if(!sysState.isDeadlock) { clearInterval(sysState.tasks[taskID].timer); ring.style.opacity='0'; return; }
+            offset -= (377/30);
+            circ.style.strokeDashoffset = Math.max(0, offset);
+            if(offset <= 0) { clearInterval(sysState.tasks[taskID].timer); resolveSystem(taskID); }
+        }, 100);
+    }
+
+    function resolveSystem(loserTask) {
+        sysState.isDeadlock = false;
+        let winnerTask = (loserTask === 'A') ? 'B' : 'A';
+        
+        // Resource Preemption: The loser task releases everything
+        sysState.tasks[loserTask].owns.forEach(m => {
+            sysState.mutexes[m] = null;
+            document.getElementById(`path-${loserTask}-${m}`).style.display = 'none';
+        });
+        document.getElementById(`path-${loserTask}-${sysState.tasks[loserTask].waitingFor}`).style.display = 'none';
+        sysState.tasks[loserTask].owns = []; sysState.tasks[loserTask].waitingFor = null;
+
+        // Grant waiting resource to the winner task
+        let targetMutex = sysState.tasks[winnerTask].waitingFor;
+        sysState.mutexes[targetMutex] = winnerTask;
+        sysState.tasks[winnerTask].owns.push(targetMutex);
+        sysState.tasks[winnerTask].waitingFor = null;
+        document.getElementById(`path-${winnerTask}-${targetMutex}`).className.baseVal = 'line-lock';
+        document.getElementById('deadlock-ui').style.display = 'none';
+    }
+
+    function resetSystem() {
+        sysState.isDeadlock = false; sysState.selectedTask = null;
+        ['A','B'].forEach(t => {
+            sysState.tasks[t].owns = []; sysState.tasks[t].waitingFor = null;
+            clearInterval(sysState.tasks[t].timer);
+            document.getElementById(`ring-${t}`).style.opacity = '0';
+            document.getElementById(`node-${t}`).classList.remove('active');
+        });
+        sysState.mutexes = { Hatch: null, Cam: null };
+        document.querySelectorAll('path').forEach(p => p.style.display = 'none');
+        document.getElementById('deadlock-ui').style.display = 'none';
+    }
+</script>
+</body>
+</html>

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Case 3: Smart Vest (Priority Inversion) - Light Theme</title>
+    <style>
+        /* Ana arka plan beyaz, metinler koyu gri yapıldı */
+        body { font-family: 'Segoe UI', sans-serif; background: #ffffff; color: #333; margin: 0; padding: 20px; }
+        h2 { text-align: center; color: #2c3e50; }
+        
+        /* Paneller açık gri tonlarına çekildi */
+        .controls { background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .btn { background: #4a90e2; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn:hover { background: #357abd; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; color: #666; }
+        
+        .dashboard { display: flex; gap: 20px; margin-bottom: 20px; }
+        .task-panel { flex: 1; display: flex; flex-direction: column; gap: 15px; }
+        
+        /* Kartların okunabilirliği için gölge ve hafif kenarlık eklendi */
+        .task-card { background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; border-left: 5px solid #a6a6a6; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .task-card.high { border-left-color: #e74c3c; }
+        .task-card.med { border-left-color: #f39c12; }
+        .task-card.low { border-left-color: #2ecc71; }
+        
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; background: #eee; color: #333; }
+        .badge.prio { background: #8e44ad; color: white; }
+        .badge.inherited { background: #e74c3c; color: white; animation: blink 1s infinite; }
+        
+        .mutex-panel { width: 300px; background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; text-align: center; display: flex; flex-direction: column; justify-content: center;}
+        .mutex-box { background: #fff; border: 2px solid #ccc; padding: 20px; border-radius: 50%; width: 100px; height: 100px; margin: 0 auto; display: flex; align-items: center; justify-content: center; font-weight: bold; flex-direction: column; color: #555; }
+        .mutex-box.locked { border-color: #e74c3c; color: #e74c3c; box-shadow: 0 0 15px rgba(231, 76, 60, 0.2); }
+        
+        .gantt-container { background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; overflow: hidden; }
+        .gantt-row { display: flex; align-items: center; margin-bottom: 5px; height: 30px; }
+        .gantt-label { width: 120px; font-weight: bold; color: #555; }
+        .gantt-track { flex: 1; background: #eee; height: 100%; position: relative; overflow: hidden; display: flex; border-radius: 3px; }
+        .gantt-tick { width: 10px; height: 100%; flex-shrink: 0; }
+        .tick-RUNNING { background: #2ecc71; }
+        .tick-READY { background: #f39c12; }
+        .tick-BLOCKED { background: #e74c3c; }
+        
+        .alert { background: #c0392b; color: white; text-align: center; padding: 10px; font-weight: bold; border-radius: 5px; display: none; margin-bottom: 20px; animation: blink 1s infinite; }
+        
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <h2>Smart Vest: I2C Bus Management</h2>
+    
+    <div id="inversionAlert" class="alert">WARNING: PRIORITY INVERSION OCCURRING! BT Sync is running while Emergency task is blocked!</div>
+
+    <div class="controls">
+        <div>
+            <input type="checkbox" id="pipToggle"> <label for="pipToggle" style="font-weight:bold; font-size:18px;">Priority Inheritance Active</label>
+        </div>
+        <button class="btn" onclick="resetSystem()">Reset System</button>
+    </div>
+
+    <div class="dashboard">
+        <div class="task-panel">
+            <div class="task-card high" id="card_high">
+                <h3>Emergency (Fall Detection) <span class="badge prio">Prio: 3</span></h3>
+                <p>Status: <span id="state_high" class="badge">SLEEP</span></p>
+                <button class="btn" onclick="wakeTask('high')">Wake Up</button>
+                <button class="btn" onclick="reqMutex('high')" id="btn_req_high" disabled>Request I2C</button>
+                <button class="btn" onclick="relMutex('high')" id="btn_rel_high" style="display:none;">Release I2C</button>
+                <button class="btn" onclick="sleepTask('high')">Sleep</button>
+            </div>
+            
+            <div class="task-card med" id="card_med">
+                <h3>BT Synchronization <span class="badge prio">Prio: 2</span></h3>
+                <p>Status: <span id="state_med" class="badge">SLEEP</span></p>
+                <button class="btn" onclick="wakeTask('med')">Wake Up</button>
+                <button class="btn" onclick="sleepTask('med')">Sleep</button>
+            </div>
+            
+            <div class="task-card low" id="card_low">
+                <h3>Sensor Reading <span id="prio_low" class="badge prio">Prio: 1</span></h3>
+                <p>Status: <span id="state_low" class="badge">SLEEP</span></p>
+                <button class="btn" onclick="wakeTask('low')">Wake Up</button>
+                <button class="btn" onclick="reqMutex('low')" id="btn_req_low" disabled>Request I2C</button>
+                <button class="btn" onclick="relMutex('low')" id="btn_rel_low" style="display:none;">Release I2C</button>
+                <button class="btn" onclick="sleepTask('low')">Sleep</button>
+            </div>
+        </div>
+        
+        <div class="mutex-panel">
+            <h3>Hardware Resource</h3>
+            <div class="mutex-box" id="mutex_i2c">
+                <span>M_I2C</span>
+                <small id="mutex_owner">FREE</small>
+            </div>
+        </div>
+    </div>
+
+    <div class="gantt-container">
+        <div class="gantt-row"><div class="gantt-label">Emergency (H)</div><div class="gantt-track" id="track_high"></div></div>
+        <div class="gantt-row"><div class="gantt-label">BT Sync (M)</div><div class="gantt-track" id="track_med"></div></div>
+        <div class="gantt-row"><div class="gantt-label">Sensor (L)</div><div class="gantt-track" id="track_low"></div></div>
+    </div>
+
+<script>
+    const tasks = {
+        high: { id: 'high', basePrio: 3, currPrio: 3, state: 'SLEEP', wantsMutex: false },
+        med:  { id: 'med',  basePrio: 2, currPrio: 2, state: 'SLEEP', wantsMutex: false },
+        low:  { id: 'low',  basePrio: 1, currPrio: 1, state: 'SLEEP', wantsMutex: false }
+    };
+    
+    let mutexOwner = null;
+    let ticker = null;
+    
+    function resetSystem() {
+        Object.keys(tasks).forEach(k => {
+            tasks[k].state = 'SLEEP';
+            tasks[k].currPrio = tasks[k].basePrio;
+            tasks[k].wantsMutex = false;
+            document.getElementById(`track_${k}`).innerHTML = '';
+            document.getElementById(`state_${k}`).innerText = 'SLEEP';
+            document.getElementById(`state_${k}`).className = 'badge';
+            document.getElementById(`state_${k}`).style.background = '#eee';
+            document.getElementById(`state_${k}`).style.color = '#333';
+            if(document.getElementById(`btn_req_${k}`)) {
+                document.getElementById(`btn_req_${k}`).disabled = true;
+                document.getElementById(`btn_req_${k}`).style.display = 'inline-block';
+                document.getElementById(`btn_rel_${k}`).style.display = 'none';
+            }
+        });
+        mutexOwner = null;
+        document.getElementById('mutex_i2c').className = 'mutex-box';
+        document.getElementById('mutex_owner').innerText = 'FREE';
+        document.getElementById('prio_low').className = 'badge prio';
+        document.getElementById('prio_low').innerText = 'Prio: 1';
+        document.getElementById('inversionAlert').style.display = 'none';
+    }
+
+    function wakeTask(id) {
+        if(tasks[id].state === 'SLEEP') {
+            tasks[id].state = 'READY';
+            if(id !== 'med') document.getElementById(`btn_req_${id}`).disabled = false;
+        }
+    }
+
+    function sleepTask(id) {
+        tasks[id].state = 'SLEEP';
+        tasks[id].wantsMutex = false;
+        if(mutexOwner === id) relMutex(id);
+        if(id !== 'med') {
+            document.getElementById(`btn_req_${id}`).disabled = true;
+            document.getElementById(`btn_req_${id}`).style.display = 'inline-block';
+            document.getElementById(`btn_rel_${id}`).style.display = 'none';
+        }
+    }
+
+    function reqMutex(id) {
+        tasks[id].wantsMutex = true;
+        if(mutexOwner === null) {
+            mutexOwner = id;
+            document.getElementById(`btn_req_${id}`).style.display = 'none';
+            document.getElementById(`btn_rel_${id}`).style.display = 'inline-block';
+            document.getElementById('mutex_i2c').className = 'mutex-box locked';
+            document.getElementById('mutex_owner').innerText = 'Owned by: ' + id.toUpperCase();
+        }
+    }
+
+    function relMutex(id) {
+        if(mutexOwner === id) {
+            mutexOwner = null;
+            tasks[id].wantsMutex = false;
+            document.getElementById(`btn_req_${id}`).style.display = 'inline-block';
+            document.getElementById(`btn_rel_${id}`).style.display = 'none';
+            document.getElementById('mutex_i2c').className = 'mutex-box';
+            document.getElementById('mutex_owner').innerText = 'FREE';
+        }
+    }
+
+    function schedule() {
+        let pipActive = document.getElementById('pipToggle').checked;
+        
+        if (pipActive && mutexOwner === 'low' && tasks['high'].wantsMutex) {
+            tasks['low'].currPrio = 3;
+            document.getElementById('prio_low').className = 'badge inherited';
+            document.getElementById('prio_low').innerText = 'Inherited Prio: 3';
+        } else {
+            tasks['low'].currPrio = 1;
+            document.getElementById('prio_low').className = 'badge prio';
+            document.getElementById('prio_low').innerText = 'Prio: 1';
+        }
+
+        let highestPrio = -1;
+        let runningTask = null;
+
+        Object.keys(tasks).forEach(k => {
+            if (tasks[k].state === 'SLEEP') return;
+            
+            if (tasks[k].wantsMutex && mutexOwner !== null && mutexOwner !== k) {
+                tasks[k].state = 'BLOCKED';
+            } else {
+                tasks[k].state = 'READY'; 
+                if (tasks[k].currPrio > highestPrio) {
+                    highestPrio = tasks[k].currPrio;
+                    runningTask = k;
+                }
+            }
+        });
+
+        if (runningTask) {
+            tasks[runningTask].state = 'RUNNING';
+        }
+
+        if (tasks['high'].state === 'BLOCKED' && tasks['med'].state === 'RUNNING') {
+            document.getElementById('inversionAlert').style.display = 'block';
+        } else {
+            document.getElementById('inversionAlert').style.display = 'none';
+        }
+
+        Object.keys(tasks).forEach(k => {
+            let stateBadge = document.getElementById(`state_${k}`);
+            if (tasks[k].state !== 'SLEEP') {
+                stateBadge.innerText = tasks[k].state;
+                stateBadge.style.color = 'white';
+                if(tasks[k].state === 'RUNNING') stateBadge.style.background = '#2ecc71';
+                else if(tasks[k].state === 'READY') stateBadge.style.background = '#f39c12';
+                else if(tasks[k].state === 'BLOCKED') stateBadge.style.background = '#e74c3c';
+            } else {
+                stateBadge.innerText = 'SLEEP';
+                stateBadge.style.background = '#eee';
+                stateBadge.style.color = '#333';
+            }
+
+            let track = document.getElementById(`track_${k}`);
+            let tick = document.createElement('div');
+            tick.className = `gantt-tick ${tasks[k].state !== 'SLEEP' ? 'tick-' + tasks[k].state : ''}`;
+            track.appendChild(tick);
+            
+            if (track.children.length > 50) track.removeChild(track.firstChild);
+        });
+    }
+
+    setInterval(schedule, 200);
+</script>
+</body>
+</html>
